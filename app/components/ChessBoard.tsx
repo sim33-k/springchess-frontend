@@ -6,9 +6,11 @@ import { Chessboard } from 'react-chessboard';
 
 interface ChessBoardProps {
   gameId?: string;
+  playerId?: string;
+  playerColor?: string;
 }
 
-export default function ChessBoard({ gameId }: ChessBoardProps) {
+export default function ChessBoard({ gameId, playerId, playerColor = 'white' }: ChessBoardProps) {
   const [game, setGame] = useState(new Chess());
 
   function makeAMove(move: { from: string; to: string; promotion?: string }) {
@@ -26,6 +28,14 @@ export default function ChessBoard({ gameId }: ChessBoardProps) {
   }
 
   function onDrop(sourceSquare: string, targetSquare: string) {
+    // Check if it's the player's turn
+    const isWhiteTurn = game.turn() === 'w';
+    const isPlayersTurn = (isWhiteTurn && playerColor === 'white') || (!isWhiteTurn && playerColor === 'black');
+    
+    if (!isPlayersTurn) {
+      return false; // Not player's turn
+    }
+
     const move = makeAMove({
       from: sourceSquare,
       to: targetSquare,
@@ -37,7 +47,7 @@ export default function ChessBoard({ gameId }: ChessBoardProps) {
     }
 
     // TODO: Send move to server via socket.io
-    // socket.emit('makeMove', { gameId, move: { from: sourceSquare, to: targetSquare } });
+    // socket.emit('makeMove', { gameId, playerId, move: { from: sourceSquare, to: targetSquare } });
 
     return true;
   }
@@ -47,9 +57,14 @@ export default function ChessBoard({ gameId }: ChessBoardProps) {
       <Chessboard
         position={game.fen()}
         onPieceDrop={onDrop}
+        options={{
+          boardOrientation: playerColor === 'black' ? 'black' : 'white',
+          lightSquareStyle: { backgroundColor: '#ffffff' },
+          darkSquareStyle: { backgroundColor: '#848484' },
+        }}
         customBoardStyle={{
           borderRadius: '4px',
-          boxShadow: '0 5px 15px rgba(0, 0, 0, 0.5)',
+          boxShadow: '0 5px 15px rgba(255, 255, 255, 0.1)',
         }}
       />
     </div>

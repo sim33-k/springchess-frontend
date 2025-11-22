@@ -1,10 +1,16 @@
 'use client';
 
 import ChessBoard from '../components/ChessBoard';
+import { useSearchParams } from 'next/navigation';
 
 export default function GamePage() {
+  const searchParams = useSearchParams();
+  const gameId = searchParams.get('gameId') || 'game-123';
+  const playerId = searchParams.get('playerId') || 'player-1';
+  const playerColor = searchParams.get('color') || 'white'; // 'white' or 'black'
+
   return (
-    <div className="h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-6 overflow-hidden">
+    <div className="h-screen bg-black flex items-center justify-center p-6 overflow-hidden">
       <div className="flex flex-col max-h-full">
         {/* Top Player (Opponent) */}
         <div className="flex items-center gap-3 mb-3">
@@ -19,7 +25,7 @@ export default function GamePage() {
         </div>
 
         {/* Chess Board */}
-        <ChessBoard gameId="game-123" />
+        <ChessBoard gameId={gameId} playerId={playerId} playerColor={playerColor} />
 
         {/* Bottom Player (You) */}
         <div className="flex items-center gap-3 mt-3">
