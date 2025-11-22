@@ -1,0 +1,359 @@
+# PERN Chess Website — Architecture & Implementation Plan
+
+> A practical, production-ready plan to build a chess website (chess.com-like) using the PERN stack and modern practices. This doc covers architecture, recommended libraries, data model, APIs, realtime design, microservices breakdown, deployment, testing, security, and an MVP roadmap.
+
+---
+
+## 1. Goals & scope
+
+**Primary goal:** Build a web platform for playing, spectating, and analysing chess games with features such as live multiplayer, timers, player profiles, PGN import/export, engines for analysis, and a simple matchmaking system.
+
+**Assumptions:**
+
+* You prefer the PERN stack (Postgres, Express, React, Node). You already worked with Prisma + Postgres.
+* We will use modern front-end tech (React). Next.js is optional and recommended for certain features.
+
+---
+
+## 2. High-level architecture
+
+```
+Client (React / Next.js)  <---->  API Gateway / Load Balancer  <---->  Auth Service
+                                   |                          
+                                   |-- REST API (Express + Node + Prisma)  
+                                   |-- WebSocket Server (Socket.io)  
+                                   |-- Game Engine Service (Stockfish wasm / native)
+                                   |-- Matchmaking / Game Coordinator Service
+                                   |-- Analysis Service / Worker (BullMQ + Redis)
+                                   |-- Postgres (primary)
+                                   |-- Redis (pub/sub, cache, session, rate-limit)
+                                   |-- S3 (assets), CDN
+```
+
+**Notes:**
+
+* Frontend: React (Vite or Create React App) or Next.js if you want SSR/SSG, SEO, or easy route-level code splitting.
+* Backend: Express (or Nest.js if you want stronger structure) with Prisma for DB.
+* Real-time: Socket.io (or WebSocket) with Redis adapter for horizontal scaling.
+* Engine: Stockfish (WASM in-browser for analysis or server-side native/wasm for heavy analysis). Put engine work into a separate service or worker queue.
+
+---
+
+## 3. Why PERN + Next.js?
+
+* **PERN** gives you a solid, familiar full-stack: Postgres for reliable relational data, Express for flexible APIs, React for interactive UI, Node for server runtime.
+* **Next.js** adds server-side rendering, easy page routing, incremental static regeneration, and API routes — useful for marketing pages, SEO, and reducing client bundle size. You can still keep core APIs as standalone Express microservices and use Next.js only for the frontend.
+
+Recommendation: Use Next.js for the frontend (React) + standalone Express services for real-time/microservices (Socket server, engine workers). That mixes the best of both worlds.
+
+---
+
+## 4. Key open-source components / libraries
+
+**Game logic / rules**
+
+* `chess.js` — canonical, battle-tested rules and move generation/validation.
+
+**Board UI**
+
+* `Chessground` (Lichess) — powerful UI; be mindful of GPL license.
+* `cm-chessboard` — modern, lightweight, dependency-free SVG board.
+* `chessboard.js` — classic (depends on jQuery historically).
+
+**Engine / analysis**
+
+* `Stockfish` (WASM build) — for analysis/AI. Run in-browser for light load or server-side for heavy analysis.
+
+**Realtime / Networking**
+
+* `socket.io` — events, rooms, reconnect handling; easy pairing with Redis adapter.
+* `Redis` with `socket.io-redis` adapter — pub/sub across instances.
+
+**DB & ORM**
+
+* `PostgreSQL` + `Prisma` — recommended. Use connection pooling (PgBouncer) in production.
+
+**Queues & Background jobs**
+
+* `BullMQ` (Redis-backed) — queue engine tasks (analysis jobs, cheat detection, email).
+
+**Auth & Identity**
+
+* **Options:** Supabase Auth, Auth0, or custom JWT + refresh tokens. Supabase provides a fast path since you already used it before.
+
+**Monitoring & Observability**
+
+* `Sentry` (errors), `Prometheus` + `Grafana` (metrics), ELK or Loki for logs.
+
+**Testing**
+
+* `Jest` / `Vitest` for unit tests, `Playwright` for E2E UI tests.
+
+---
+
+## 5. Microservices breakdown (suggested)
+
+You can start monolithic and split later. If you prefer microservices from day one, this is a good minimal split:
+
+1. **Auth Service**
+
+   * Handles sign-up, sign-in, OAuth (Google), password reset, session / token management.
+   * Can use Supabase or Auth0 to avoid building it yourself.
+
+2. **User/Profile Service**
+
+   * Profile data, preferences, avatars, ratings, stats.
+
+3. **Game Service (Game Coordinator)**
+
+   * Creates game records, applies moves (server-side validation), enforces clocks and timeouts.
+   * Manages active game state in Redis and stores finalized games in Postgres.
+
+4. **Realtime / Socket Server**
+
+   * Handles rooms, broadcasting moves, chat, spectator events, and uses Redis adapter for scaling.
+
+5. **Engine / Analysis Service**
+
+   * Runs Stockfish instances for analysis and engine opponents. Jobs are queued (BullMQ) and processed by worker instances.
+
+6. **Matchmaking Service**
+
+   * Matchmaking logic, queuing players, rating range checks, pairing.
+
+7. **Worker / Background Jobs**
+
+   * Email sending, scheduled tasks, anti-cheat analysis, PGN import/export, daily leaderboards.
+
+8. **Gateway / API Layer**
+
+   * Optional API gateway (NGINX or Traefik) + load balancer. Handles routing, TLS, rate-limiting.
+
+---
+
+## 6. Data model (core tables)
+
+Simplified schema sketch (Postgres):
+
+* `users` (id, email, username, password_hash, created_at, last_seen, rating_rapid, rating_blitz, ...)
+* `profiles` (user_id, display_name, bio, country, avatar_url, prefs)
+* `games` (id, white_id, black_id, start_time, end_time, result, time_control, initial_fen, is_rated, status)
+* `moves` (id, game_id, ply, san, from_sq, to_sq, uci, fen_after, created_at)
+* `pgns` (id, game_id, pgn_text)
+* `tournaments` (id, name, type, status)
+* `sessions` (id, user_id, token, expires_at)
+* `reports` (game_id, reporter_id, reason)
+
+**Indexes:** index on active games, player_id, created_at. Use partitioning for very large tables.
+
+---
+
+## 7. Server-side move validation & anti-cheat
+
+Important: Never trust client-side validation. Always:
+
+* Validate every move server-side using `chess.js` or the server game state.
+* Keep a canonical authoritative game state in Redis (for active games), commit finished games to Postgres.
+* Log all moves, timestamps, and engine evaluations (when running analysis) for cheat detection.
+
+**Anti-cheat basics:**
+
+* Detect improbable move sequences (compare moves vs engine top choices).
+* Track response time patterns and sudden rating jumps.
+* Flag / queue for manual review.
+
+---
+
+## 8. Real-time flow (simplified)
+
+1. Player opens a game page — client connects to Socket server and joins `game:<id>` room.
+2. On move: client sends `move` event with UCI / SAN and auth token.
+3. Server receives event -> verifies token -> checks move legality using `chess.js` on server state -> updates Redis state -> broadcasts `move` to room -> persists move to Postgres asynchronously (worker).
+4. Timer handling: server enforces clocks; if a player disconnects, server has a short grace window and can allow reconnects.
+
+Socket events (examples): `join`, `leave`, `move`, `resign`, `offer_draw`, `accept_draw`, `ping`, `chat`, `spectate`.
+
+---
+
+## 9. Timers & clocks
+
+* Keep clocks authoritative on server. Use high-resolution timestamps when applying moves (e.g., `remaining = prev_remaining - (move_received_at - last_move_at)`).
+* Save periodic snapshots to Redis to avoid drift.
+
+---
+
+## 10. Engine integration patterns
+
+Options:
+
+* **In-browser Stockfish (WASM):** good for client-side analysis and offline bots. Not suitable for authoritative server-side anti-cheat or large-scale analysis.
+* **Server-side Stockfish instances (recommended for analysis & rated play):** spawn per-job or maintain a pool of engine instances. Use a Queue (BullMQ) to schedule analysis jobs.
+* **Dedicated Engine Service:** each worker runs Stockfish and accepts jobs over HTTP or a lightweight RPC (gRPC, or Redis queues).
+
+Memory/cpu: Stockfish uses CPU cores; run these on separate machines or K8s nodes with appropriate resource limits.
+
+---
+
+## 11. Deployment & infra
+
+* **Containerization:** Docker for all services.
+* **Orchestration:** Kubernetes (recommended for large-scale) or Docker Compose for dev/small deployments.
+* **DB:** Managed Postgres (AWS RDS, Supabase, ElephantSQL) + PgBouncer.
+* **Cache & Pub/Sub:** Redis (cluster for scale).
+* **CDN & storage:** S3-compatible for avatars and static content + Cloudflare or other CDN.
+* **TLS / Gateway:** Nginx or Traefik + cert-manager (Let's Encrypt) in K8s.
+* **CI/CD:** GitHub Actions or GitLab CI for build, test, container image push, and deployment.
+
+---
+
+## 12. Observability & SLOs
+
+* **Logging:** structured logs (JSON) to a log aggregation (ELK or Loki).
+* **Tracing / Metrics:** instrument services with Prometheus metrics and expose `/metrics`. Visualize in Grafana.
+* **Error tracking:** Sentry.
+* **SLO ideas:** 99.9% Socket event delivery, <200ms median API response for game endpoints.
+
+---
+
+## 13. Security
+
+* Use HTTPS everywhere.
+* Protect endpoints with RBAC where needed.
+* Rate-limit socket events and APIs per IP / user.
+* Strict CORS, CSP headers.
+* Sanitize all user inputs (chat, usernames) to avoid XSS.
+* Use prepared statements (Prisma) to avoid SQL injection.
+* Ensure password hashing with Argon2 or bcrypt (if self-hosting auth).
+
+---
+
+## 14. Licensing considerations
+
+* `Chessground` is GPL-3.0. If you plan a proprietary/commercial product, GPL may force you to open source your code under GPL as well. Consider `cm-chessboard` or create your own board UI if licensing is an issue.
+
+---
+
+## 15. MVP feature list (0.1 release)
+
+* User sign-up / sign-in (email + OAuth)
+* Create / join rated & casual games
+* Live play with clocks (blitz, rapid)
+* Move validation and persistent move history
+* Spectator mode
+* Player profiles and rating display
+* PGN export of finished games
+* Basic analysis with a lightweight engine (in-browser Stockfish)
+
+---
+
+## 16. Roadmap & milestones
+
+**Phase 0 — Prototype (2–4 weeks)**
+
+* Frontend Next.js app with board UI (Chessground or cm-chessboard)
+* Local move validation with chess.js
+* Basic Express API + Postgres with Prisma
+* Connect move events via simple WebSocket (Socket.io)
+
+**Phase 1 — MVP (6–10 weeks)**
+
+* Server-side move validation & persistent storage
+* Timers implemented server-side
+* Simple matchmaking & rated games
+* In-browser Stockfish for analysis
+* Deploy on a single cloud server (Docker Compose)
+
+**Phase 2 — Productionize (8–12 weeks)**
+
+* Split services (socket server, engine workers)
+* Redis, PgBouncer, managed Postgres
+* CI/CD, monitoring, backups
+* Add anti-cheat heuristics and review pipeline
+
+**Phase 3 — Scale & polish**
+
+* Kubernetes, autoscaling, geo-distribution
+* Tournaments, study tools, puzzles generator, monetization
+
+---
+
+## 17. Example API endpoints (REST) & socket contract
+
+**REST (Express + Prisma)**
+
+* `POST /api/auth/signup` — body: {email, username, password}
+* `POST /api/auth/login` — body: {email, password} -> returns access + refresh tokens
+* `GET /api/users/:id/profile`
+* `POST /api/games` — create new game (time control, rated, opponent)
+* `GET /api/games/:id` — fetch game metadata and PGN
+
+**Socket events (Socket.io)**
+
+* Client -> Server: `joinGame` { gameId, token }
+* Server -> Client: `gameState` { fen, clocks, moves }
+* Client -> Server: `makeMove` { uci, san, timestamp }
+* Server -> Client: `moveMade` { uci, san, fen, ply }
+* Client -> Server: `offerDraw`, `resign`
+
+Always authenticate socket connections (JWT on connect or after handshake).
+
+---
+
+## 18. Local dev setup (quick)
+
+* `docker-compose.yml` with Postgres + Redis + local web server + worker.
+* `env.example` for secrets.
+* Use `nodemon` / `ts-node-dev` for backend development and `next dev` or `vite` for frontend.
+
+---
+
+## 19. Testing strategy
+
+* Unit tests for chess logic wrappers and API endpoints.
+* Integration tests: spawn a Redis + Postgres test environment, create game flows (two clients making moves), verify server-side state.
+* E2E tests with Playwright to drive browser flows (play a short game, make offers, resign).
+
+---
+
+## 20. Cost & resource planning (baseline)
+
+Small-scale MVP monthly estimate (approx):
+
+* Managed Postgres: $15–50
+* Redis small instance: $10–30
+* 1–2 small app servers: $20–80
+* Storage & CDN: small costs for avatars/static
+* Total: $60–200 / month for dev MVP. Production with engines and many users is significantly more.
+
+---
+
+## 21. Quick checklist to get started right now
+
+1. Pick board UI: Chessground or cm-chessboard.
+2. Set up a Next.js app and a separate Express API repo.
+3. Add `chess.js` into server for move validation.
+4. Wire Socket.io between client and server with Redis adapter.
+5. Add Postgres + Prisma and create `users`, `games`, `moves` tables.
+6. Integrate a simple Stockfish wasm client for per-user analysis.
+7. Add logging and basic monitoring from day one.
+
+---
+
+## 22. Appendix — further reading & references
+
+* chess.js — move/legal engine
+* Stockfish wasm builds
+* Chessground (Lichess) and cm-chessboard docs
+
+---
+
+---
+
+*If you want, I can:*
+
+* produce a **detailed API spec (OpenAPI)** for the endpoints above,
+* generate a **deployment manifest** (Kubernetes YAML) for the services,
+* scaffold a starter repo (Next.js frontend + Express API + basic Docker Compose), or
+* create a costed, time-lined sprint plan for your team.
+
+Tell me which of those you want next and I'll generate it.
