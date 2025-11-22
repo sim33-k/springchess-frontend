@@ -15,10 +15,7 @@ export default function GamePage() {
               className="w-full h-full"
             />
           </div>
-          <div>
-            <p className="text-white font-semibold text-sm">Opponent</p>
-            <p className="text-gray-400 text-xs">Waiting...</p>
-          </div>
+          <p className="text-white font-semibold text-sm">Opponent</p>
         </div>
 
         {/* Chess Board */}
@@ -33,10 +30,7 @@ export default function GamePage() {
               className="w-full h-full"
             />
           </div>
-          <div>
-            <p className="text-white font-semibold text-sm">You</p>
-            <p className="text-gray-400 text-xs">Ready</p>
-          </div>
+          <p className="text-white font-semibold text-sm">You</p>
         </div>
       </div>
     </div>
