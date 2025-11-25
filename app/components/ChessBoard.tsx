@@ -11,38 +11,37 @@ interface ChessBoardProps {
 }
 
 export default function ChessBoard({ gameId, playerId, playerColor = 'white' }: ChessBoardProps) {
-  const [game, setGame] = useState(new Chess());
+  const [game, setGame] = useState(() => new Chess());
 
   function makeAMove(move: { from: string; to: string; promotion?: string }) {
-    const gameCopy = new Chess(game.fen());
     try {
+      const gameCopy = new Chess(game.fen());
       const result = gameCopy.move(move);
       if (result) {
         setGame(gameCopy);
         return true;
       }
+      return false;
     } catch (error) {
+      console.error('Invalid move:', error);
       return false;
     }
-    return false;
   }
 
-  function onDrop(sourceSquare: string, targetSquare: string) {
-    // Check if it's the player's turn
-    const isWhiteTurn = game.turn() === 'w';
-    const isPlayersTurn = (isWhiteTurn && playerColor === 'white') || (!isWhiteTurn && playerColor === 'black');
-    
-    if (!isPlayersTurn) {
-      return false; // Not player's turn
+  function onDrop({ sourceSquare, targetSquare, piece }: { sourceSquare: string | null; targetSquare: string | null; piece: string }) {
+    if (!sourceSquare || !targetSquare) {
+      return false;
     }
 
-    const move = makeAMove({
+    const moveResult = makeAMove({
       from: sourceSquare,
       to: targetSquare,
       promotion: 'q', // always promote to queen for simplicity
     });
 
-    if (!move) {
+    console.log('Move result:', moveResult, 'From:', sourceSquare, 'To:', targetSquare);
+
+    if (!moveResult) {
       return false;
     }
 
@@ -55,9 +54,10 @@ export default function ChessBoard({ gameId, playerId, playerColor = 'white' }: 
   return (
     <div className="w-full max-w-[500px]">
       <Chessboard
-        position={game.fen()}
-        onPieceDrop={onDrop}
+        id="BasicBoard"
         options={{
+          position: game.fen(),
+          onPieceDrop: onDrop,
           boardOrientation: playerColor === 'black' ? 'black' : 'white',
           lightSquareStyle: { backgroundColor: '#ffffff' },
           darkSquareStyle: { backgroundColor: '#848484' },
